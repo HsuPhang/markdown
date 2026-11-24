@@ -4,6 +4,8 @@ import Combine
 final class EditorState: ObservableObject {
     @Published var text: String = ""
     @Published var selection: NSRange = NSRange(location: 0, length: 0)
+    /// 当前视图模式，交给「视图」菜单读写。
+    @Published var mode: EditorMode = .edit
 
     var pendingSelection: NSRange?
 

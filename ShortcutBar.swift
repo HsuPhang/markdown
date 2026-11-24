@@ -3,50 +3,53 @@ import SwiftUI
 /// 顶部快捷工具栏：参考 macOS 的菜单分类，把 Markdown 命令收进「格式 / 标题 / 列表 / 插入」四个分类。
 struct ShortcutBar: View {
     @ObservedObject var state: EditorState
+    /// 嵌进导航栏时使用紧凑布局，不显示字数、不留额外边距。
+    var compact = false
 
     @EnvironmentObject private var localization: LocalizationManager
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         HStack(spacing: 8) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    Menu {
-                        formatMenu
-                    } label: {
-                        chip(.formatCategory, systemImage: "textformat")
-                    }
-
-                    Menu {
-                        headingMenu
-                    } label: {
-                        chip(.headingsCategory, systemImage: "textformat.size")
-                    }
-
-                    Menu {
-                        listMenu
-                    } label: {
-                        chip(.listsCategory, systemImage: "list.bullet")
-                    }
-
-                    Menu {
-                        insertMenu
-                    } label: {
-                        chip(.insertCategory, systemImage: "plus.square")
-                    }
+            if !compact {
+                if horizontalSizeClass == .regular {
+                    Text(localization.text(.characterCount, state.text.count))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .padding(.leading, 12)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
+
+                Spacer(minLength: 12)
             }
 
-            Text(localization.text(.characterCount, state.text.count))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.trailing, 12)
-                .lineLimit(1)
-        }
-        .background(.bar)
-        .overlay(alignment: .bottom) {
-            Divider()
+            HStack(spacing: 8) {
+                Menu {
+                    formatMenu
+                } label: {
+                    chip(.formatCategory, systemImage: "textformat")
+                }
+
+                Menu {
+                    headingMenu
+                } label: {
+                    chip(.headingsCategory, systemImage: "textformat.size")
+                }
+
+                Menu {
+                    listMenu
+                } label: {
+                    chip(.listsCategory, systemImage: "list.bullet")
+                }
+
+                Menu {
+                    insertMenu
+                } label: {
+                    chip(.insertCategory, systemImage: "plus.square")
+                }
+            }
+            .padding(.trailing, compact ? 0 : 12)
+            .padding(.vertical, compact ? 0 : 7)
         }
     }
 
@@ -57,14 +60,12 @@ struct ShortcutBar: View {
         } label: {
             Label(localization.text(.bold), systemImage: "bold")
         }
-        .keyboardShortcut("b", modifiers: .command)
 
         Button {
             state.insert(prefix: "*", suffix: "*")
         } label: {
             Label(localization.text(.italic), systemImage: "italic")
         }
-        .keyboardShortcut("i", modifiers: .command)
 
         Button {
             state.insert(prefix: "~~", suffix: "~~")
@@ -85,7 +86,6 @@ struct ShortcutBar: View {
         } label: {
             Label(localization.text(.link), systemImage: "link")
         }
-        .keyboardShortcut("k", modifiers: .command)
 
         Button {
             state.insert(prefix: "![\(localization.text(.imageAlt))](", suffix: ")")
@@ -102,7 +102,6 @@ struct ShortcutBar: View {
             } label: {
                 Text(localization.text(.headingFormat, level))
             }
-            .keyboardShortcut(ShortcutBar.headingKey(level), modifiers: [.command, .option])
         }
 
         Divider()
@@ -157,6 +156,22 @@ struct ShortcutBar: View {
             Label(localization.text(.codeBlock), systemImage: "curlybraces")
         }
 
+        Divider()
+
+        Button {
+            state.insert(prefix: "$", suffix: "$")
+        } label: {
+            Label(localization.text(.inlineMath), systemImage: "function")
+        }
+
+        Button {
+            state.insert(prefix: "$$\n", suffix: "\n$$")
+        } label: {
+            Label(localization.text(.blockMath), systemImage: "sum")
+        }
+
+        Divider()
+
         Button {
             state.insert(prefix: "\n---\n", suffix: "")
         } label: {
@@ -177,17 +192,6 @@ struct ShortcutBar: View {
             .foregroundStyle(.primary)
             .padding(.horizontal, 11)
             .padding(.vertical, 6)
-            .background(Color.secondary.opacity(0.12), in: Capsule())
-    }
-
-    private static func headingKey(_ level: Int) -> KeyEquivalent {
-        switch level {
-        case 1: return "1"
-        case 2: return "2"
-        case 3: return "3"
-        case 4: return "4"
-        case 5: return "5"
-        default: return "6"
-        }
+            .glassEffect(.regular.interactive(), in: Capsule())
     }
 }

@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import Combine
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var store = DocumentStore()
@@ -9,9 +11,12 @@ struct ContentView: View {
     @State private var inputName = ""
     @State private var renameTarget: MDDocument?
     @State private var nameExistsAlert = false
+    @State private var showsImporter = false
+    @State private var showsSettings = false
 
     @EnvironmentObject private var localization: LocalizationManager
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
 
     enum NameAlertKind {
         case create
@@ -24,11 +29,24 @@ struct ContentView: View {
                 ForEach(store.documents) { document in
                     DocumentRow(document: document)
                         .tag(document)
+                        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                            Button {
+                                beginRename(document)
+                            } label: {
+                                Text(localization.text(.rename))
+                            }
+                            .tint(.blue)
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                delete(document)
+                            } label: {
+                                Text(localization.text(.delete))
+                            }
+                        }
                         .contextMenu {
                             Button {
-                                renameTarget = document
-                                inputName = document.title
-                                nameAlertKind = .rename
+                                beginRename(document)
                             } label: {
                                 Label(localization.text(.rename), systemImage: "pencil")
                             }
@@ -39,7 +57,6 @@ struct ContentView: View {
                             }
                         }
                 }
-                .onDelete(perform: deleteAt)
             }
             .overlay {
                 if store.documents.isEmpty {
@@ -55,10 +72,14 @@ struct ContentView: View {
                     .padding(24)
                 }
             }
-            .navigationTitle("MarkPad")
+            .navigationTitle("Mark")
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    languageMenu
+                    Button {
+                        showsImporter = true
+                    } label: {
+                        Label(localization.text(.openFile), systemImage: "folder")
+                    }
                     Button {
                         inputName = ""
                         nameAlertKind = .create
@@ -91,9 +112,16 @@ struct ContentView: View {
         }
         .onAppear {
             AppIconManager.sync(with: colorScheme)
+            localization.syncFromSystemSettings()
         }
         .onChange(of: colorScheme) { _, newValue in
             AppIconManager.sync(with: newValue)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                localization.syncFromSystemSettings()
+                AppIconManager.sync(with: colorScheme)
+            }
         }
         .alert(alertTitle, isPresented: alertBinding) {
             TextField(localization.text(.fileName), text: $inputName)
@@ -106,20 +134,94 @@ struct ContentView: View {
         .alert(localization.text(.nameExists), isPresented: $nameExistsAlert) {
             Button(localization.text(.confirm), role: .cancel) {}
         }
+        .sheet(isPresented: $showsSettings) {
+            SettingsView()
+        }
+        .fileImporter(
+            isPresented: $showsImporter,
+            allowedContentTypes: [.plainText],
+            allowsMultipleSelection: false
+        ) { result in
+            if case let .success(urls) = result, let url = urls.first {
+                openExternal(url)
+            }
+        }
+        .onOpenURL { url in
+            openExternal(url)
+        }
+        .focusedSceneValue(\.documentActions, documentActions)
     }
 
-    private var languageMenu: some View {
-        Menu {
-            Picker(localization.text(.interfaceLanguage), selection: $localization.selection) {
-                Text(localization.text(.followSystem))
-                    .tag(AppLanguage.system)
-                ForEach(AppLanguage.allCases.filter { $0 != .system }) { language in
-                    Text(language.displayName)
-                        .tag(language)
+    private var documentActions: DocumentActions {
+        DocumentActions(
+            newDocument: {
+                inputName = ""
+                nameAlertKind = .create
+            },
+            openDocument: {
+                showsImporter = true
+            },
+            previousDocument: {
+                selectAdjacent(offset: -1)
+            },
+            nextDocument: {
+                selectAdjacent(offset: 1)
+            },
+            renameSelection: {
+                if let selection {
+                    beginRename(selection)
                 }
-            }
-        } label: {
-            Label(localization.text(.language), systemImage: "globe")
+            },
+            deleteSelection: {
+                if let selection {
+                    delete(selection)
+                }
+            },
+            openSettings: {
+                showsSettings = true
+            },
+            hasSelection: selection != nil,
+            hasPreviousDocument: canMove(by: -1),
+            hasNextDocument: canMove(by: 1)
+        )
+    }
+
+    private func selectAdjacent(offset: Int) {
+        let documents = store.documents
+        guard !documents.isEmpty else { return }
+        let target: Int
+        if let index = selection.flatMap({ documents.firstIndex(of: $0) }) {
+            target = index + offset
+        } else {
+            target = offset > 0 ? 0 : documents.count - 1
+        }
+        guard documents.indices.contains(target) else { return }
+        selection = documents[target]
+    }
+
+    private func canMove(by offset: Int) -> Bool {
+        let documents = store.documents
+        guard !documents.isEmpty else { return false }
+        guard let index = selection.flatMap({ documents.firstIndex(of: $0) }) else {
+            return true
+        }
+        return documents.indices.contains(index + offset)
+    }
+
+    private func beginRename(_ document: MDDocument) {
+        renameTarget = document
+        inputName = document.title
+        nameAlertKind = .rename
+    }
+
+    /// 从「文件」App 或“用 Mark 打开”进来的文档：读到本地文档目录后再打开。
+    private func openExternal(_ url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+        }
+        if let imported = store.importDocument(from: url) {
+            selection = imported
         }
     }
 
@@ -183,15 +285,6 @@ struct ContentView: View {
             selection = nil
         }
         store.delete(document)
-    }
-
-    private func deleteAt(_ offsets: IndexSet) {
-        let targets = offsets.compactMap { index -> MDDocument? in
-            index < store.documents.count ? store.documents[index] : nil
-        }
-        for target in targets {
-            delete(target)
-        }
     }
 }
 

@@ -3,7 +3,6 @@ import Combine
 
 /// App 支持的界面语言。
 enum AppLanguage: String, CaseIterable, Identifiable, Codable {
-    case system
     case simplifiedChinese = "zh-Hans"
     case traditionalChinese = "zh-Hant"
     case english = "en"
@@ -17,10 +16,9 @@ enum AppLanguage: String, CaseIterable, Identifiable, Codable {
 
     var id: String { rawValue }
 
-    /// 语言菜单里显示的名称，使用该语言自身的写法。
+    /// 显示该语言自身的写法。
     var displayName: String {
         switch self {
-        case .system: return ""
         case .simplifiedChinese: return "简体中文"
         case .traditionalChinese: return "繁體中文"
         case .english: return "English"
@@ -34,9 +32,7 @@ enum AppLanguage: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    var localeIdentifier: String {
-        self == .system ? Locale.current.identifier : rawValue
-    }
+    var localeIdentifier: String { rawValue }
 
     /// 维吾尔文使用从右到左排版。
     var isRightToLeft: Bool {
@@ -44,24 +40,19 @@ enum AppLanguage: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-/// 管理界面语言：持久化选择、解析系统语言、提供布局方向与翻译。
+/// 管理界面语言：读取系统为 App 选择的「首选语言」，提供布局方向与翻译。
 final class LocalizationManager: ObservableObject {
-    static let storageKey = "MarkPad.interfaceLanguage"
-
-    @Published var selection: AppLanguage {
-        didSet {
-            UserDefaults.standard.set(selection.rawValue, forKey: Self.storageKey)
-            resolved = Self.resolve(selection)
-        }
-    }
-
     @Published private(set) var resolved: AppLanguage
 
     init() {
-        let stored = UserDefaults.standard.string(forKey: Self.storageKey) ?? AppLanguage.system.rawValue
-        let choice = AppLanguage(rawValue: stored) ?? .system
-        selection = choice
-        resolved = Self.resolve(choice)
+        resolved = Self.detect()
+    }
+
+    /// 从系统设置返回时重新解析一次；切换首选语言后系统会重启 App。
+    func syncFromSystemSettings() {
+        let detected = Self.detect()
+        guard detected != resolved else { return }
+        resolved = detected
     }
 
     var locale: Locale {
@@ -79,25 +70,35 @@ final class LocalizationManager: ObservableObject {
         return String(format: template, locale: locale, arguments: arguments)
     }
 
-    private static func resolve(_ choice: AppLanguage) -> AppLanguage {
-        guard choice == .system else { return choice }
+    /// 菜单构建时读取当前语言；原生首选语言只在重启 App 后生效。
+    static var currentLanguage: AppLanguage {
+        detect()
+    }
 
-        for identifier in Locale.preferredLanguages {
-            let tag = identifier.lowercased()
-            if tag.hasPrefix("zh-hant") || tag.hasPrefix("zh-tw") || tag.hasPrefix("zh-hk") || tag.hasPrefix("zh-mo") {
-                return .traditionalChinese
-            }
-            if tag.hasPrefix("zh") { return .simplifiedChinese }
-            if tag.hasPrefix("en") { return .english }
-            if tag.hasPrefix("ja") { return .japanese }
-            if tag.hasPrefix("vi") { return .vietnamese }
-            if tag.hasPrefix("ko") { return .korean }
-            if tag.hasPrefix("bo") { return .tibetan }
-            if tag.hasPrefix("ug") { return .uyghur }
-            if tag.hasPrefix("ii") { return .yi }
-            if tag.hasPrefix("es") { return .spanish }
+    /// 优先读取 App 的本地化顺序（受系统「首选语言」影响），再回退到系统语言列表。
+    private static func detect() -> AppLanguage {
+        for identifier in Bundle.main.preferredLocalizations {
+            if let language = match(identifier) { return language }
         }
-
+        for identifier in Locale.preferredLanguages {
+            if let language = match(identifier) { return language }
+        }
         return .english
+    }
+
+    private static func match(_ identifier: String) -> AppLanguage? {
+        let tag = identifier.lowercased()
+        if tag.hasPrefix("zh-hant") || tag.hasPrefix("zh-tw") || tag.hasPrefix("zh-hk") || tag.hasPrefix("zh-mo") {
+            return .traditionalChinese
+        }
+        if tag.hasPrefix("zh") { return .simplifiedChinese }
+
+        for language in AppLanguage.allCases {
+            let code = language.rawValue.lowercased()
+            if tag == code || tag.hasPrefix(code + "-") || tag.hasPrefix(code + "_") {
+                return language
+            }
+        }
+        return nil
     }
 }

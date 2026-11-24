@@ -15,6 +15,14 @@ enum EditorMode: String, CaseIterable, Identifiable {
         case .preview: return .previewMode
         }
     }
+
+    var iconName: String {
+        switch self {
+        case .edit: return "square.and.pencil"
+        case .split: return "rectangle.split.2x1"
+        case .preview: return "eye"
+        }
+    }
 }
 
 struct ExportItems: Identifiable {
@@ -28,7 +36,6 @@ struct EditorView: View {
     let document: MDDocument
 
     @StateObject private var state = EditorState()
-    @State private var mode: EditorMode = .split
     @State private var didSetInitialMode = false
     @State private var exportItems: ExportItems?
     @State private var saveTask: Task<Void, Never>?
@@ -37,17 +44,29 @@ struct EditorView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var localization: LocalizationManager
+    @AppStorage(AppSettings.spellCheckKey) private var spellCheckEnabled = false
 
     var body: some View {
         VStack(spacing: 0) {
-            if showsEditor {
-                ShortcutBar(state: state)
-            }
             content
+                .id(state.mode)
+                .transition(.blurReplace)
         }
-        .navigationTitle(document.title)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { toolbarContent }
+        .animation(.easeInOut(duration: 0.28), value: state.mode)
+        .overlay(alignment: .bottomTrailing) {
+            floatingControls
+                .padding(.trailing, 20)
+                .padding(.bottom, 10)
+        }
+        .toolbar {
+            if showsEditor {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ShortcutBar(state: state, compact: true)
+                }
+            }
+        }
+        .focusedSceneValue(\.editorState, state)
+        .focusedSceneValue(\.editorActions, editorActions)
         .task(id: document) {
             loadDocument()
         }
@@ -55,8 +74,8 @@ struct EditorView: View {
             scheduleSave(newValue)
         }
         .onChange(of: horizontalSizeClass) { _, newValue in
-            if newValue == .compact, mode == .split {
-                mode = .edit
+            if newValue == .compact, state.mode == .split {
+                state.mode = .edit
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -73,47 +92,81 @@ struct EditorView: View {
     }
 
     private var showsEditor: Bool {
-        mode != .preview
+        state.mode != .preview
     }
 
     @ViewBuilder
     private var content: some View {
-        if mode == .split && horizontalSizeClass == .regular {
+        switch state.mode {
+        case .edit:
+            editorPane
+        case .split:
             HStack(spacing: 0) {
                 editorPane
                 Divider()
                 MarkdownPreview(text: state.text)
             }
-        } else if mode == .preview {
+        case .preview:
             MarkdownPreview(text: state.text)
-        } else {
-            editorPane
         }
     }
 
     private var editorPane: some View {
-        MarkdownTextView(state: state, layoutDirection: localization.layoutDirection)
-            .background(Color(uiColor: .secondarySystemBackground))
+        MarkdownTextView(
+            state: state,
+            layoutDirection: localization.layoutDirection,
+            spellCheckEnabled: spellCheckEnabled
+        )
+        .background(Color(uiColor: .systemBackground))
     }
 
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .principal) {
-            Picker(localization.text(.viewMode), selection: $mode) {
-                ForEach(availableModes) { item in
-                    Text(localization.text(item.titleKey)).tag(item)
+    /// 右下角悬浮按钮组：编辑 / 分栏 / 预览 / 分享。
+    private var floatingControls: some View {
+        VStack(spacing: 10) {
+            ForEach(availableModes) { mode in
+                modeButton(mode)
+            }
+            floatingShareButton
+        }
+    }
+
+    private func modeButton(_ mode: EditorMode) -> some View {
+        Button {
+            state.mode = mode
+        } label: {
+            Image(systemName: mode.iconName)
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(state.mode == mode ? Color.accentColor : Color.primary)
+                .frame(width: 50, height: 50)
+                .contentShape(Circle())
+                .background {
+                    if state.mode == mode {
+                        Circle().fill(Color.accentColor.opacity(0.16))
+                    }
                 }
-            }
-            .pickerStyle(.segmented)
-            .frame(minWidth: 200, maxWidth: 360)
         }
-        ToolbarItem(placement: .topBarTrailing) {
-            Button {
-                exportAll()
-            } label: {
-                Label(localization.text(.export), systemImage: "square.and.arrow.up")
-            }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+        .accessibilityLabel(localization.text(mode.titleKey))
+        .accessibilityAddTraits(state.mode == mode ? .isSelected : [])
+    }
+
+    /// 右下角悬浮分享按钮，三种模式下都可见。
+    private var floatingShareButton: some View {
+        Button {
+            exportAll()
+        } label: {
+            Image(systemName: "square.and.arrow.up")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 50, height: 50)
+                .contentShape(Circle())
         }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+        .accessibilityLabel(localization.text(.export))
     }
 
     private var availableModes: [EditorMode] {
@@ -121,6 +174,14 @@ struct EditorView: View {
             return EditorMode.allCases
         }
         return [.edit, .preview]
+    }
+
+    private var editorActions: EditorActions {
+        EditorActions(
+            saveDocument: { saveNow() },
+            exportDocument: { exportAll() },
+            allowsSplit: horizontalSizeClass == .regular
+        )
     }
 
     private func exportAll() {
@@ -147,7 +208,7 @@ struct EditorView: View {
         state.resetSelectionToStart()
 
         if !didSetInitialMode {
-            mode = horizontalSizeClass == .regular ? .split : .edit
+            state.mode = horizontalSizeClass == .regular ? .split : .edit
             didSetInitialMode = true
         }
 

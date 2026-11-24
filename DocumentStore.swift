@@ -21,7 +21,12 @@ final class DocumentStore: ObservableObject {
 
     var folderURL: URL {
         let base = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("MarkPad", isDirectory: true)
+        let dir = base.appendingPathComponent("Mark", isDirectory: true)
+        let legacy = base.appendingPathComponent("MarkPad", isDirectory: true)
+        // 应用改名为 Mark 后，把旧目录整体迁移过来，避免已有文档“消失”。
+        if !fm.fileExists(atPath: dir.path), fm.fileExists(atPath: legacy.path) {
+            try? fm.moveItem(at: legacy, to: dir)
+        }
         if !fm.fileExists(atPath: dir.path) {
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
@@ -61,11 +66,45 @@ final class DocumentStore: ObservableObject {
     }
 
     func read(_ document: MDDocument) -> String? {
+        readContents(at: document.url)
+    }
+
+    /// 把「文件」App 里选中的文档复制到应用目录，返回可编辑的本地文档。
+    func importDocument(from url: URL) -> MDDocument? {
+        let folder = folderURL.standardizedFileURL
+        let source = url.standardizedFileURL
+        if source.deletingLastPathComponent() == folder {
+            reload()
+            return MDDocument(url: source)
+        }
+
+        guard let content = readContents(at: url) else { return nil }
+
+        var base = sanitizedTitle(url.deletingPathExtension().lastPathComponent)
+        if base.isEmpty { base = "Untitled" }
+        var target = folderURL.appendingPathComponent(base + ".md")
+        var index = 2
+        while fm.fileExists(atPath: target.path) {
+            target = folderURL.appendingPathComponent("\(base) \(index).md")
+            index += 1
+        }
+
         do {
-            return try String(contentsOf: document.url, encoding: .utf8)
+            try content.write(to: target, atomically: true, encoding: .utf8)
+            reload()
+            return MDDocument(url: target)
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    private func readContents(at url: URL) -> String? {
+        do {
+            return try String(contentsOf: url, encoding: .utf8)
         } catch {
             var encoding = String.Encoding.utf8
-            if let text = try? String(contentsOf: document.url, usedEncoding: &encoding) {
+            if let text = try? String(contentsOf: url, usedEncoding: &encoding) {
                 return text
             }
             errorMessage = error.localizedDescription

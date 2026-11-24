@@ -4,6 +4,7 @@ import UIKit
 struct MarkdownTextView: UIViewRepresentable {
     @ObservedObject var state: EditorState
     var layoutDirection: LayoutDirection = .leftToRight
+    var spellCheckEnabled = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator(state: state)
@@ -18,6 +19,7 @@ struct MarkdownTextView: UIViewRepresentable {
         view.alwaysBounceVertical = true
         view.keyboardDismissMode = .interactive
         view.autocorrectionType = .no
+        view.spellCheckingType = spellCheckEnabled ? .yes : .no
         view.autocapitalizationType = .sentences
         view.smartQuotesType = .no
         view.smartDashesType = .no
@@ -35,6 +37,10 @@ struct MarkdownTextView: UIViewRepresentable {
 
     func updateUIView(_ view: UITextView, context: Context) {
         applyLayoutDirection(layoutDirection, to: view)
+        let desiredSpellCheck: UITextSpellCheckingType = spellCheckEnabled ? .yes : .no
+        if view.spellCheckingType != desiredSpellCheck {
+            view.spellCheckingType = desiredSpellCheck
+        }
         // 输入法正在组词时不要整体替换文本，否则会把 marked text 清掉。
         if view.text != state.text, view.markedTextRange == nil {
             view.text = state.text
